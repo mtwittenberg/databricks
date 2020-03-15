@@ -1,0 +1,305 @@
+# File location and type
+file_location = "/FileStore/tables/avocado.csv"
+file_type = "csv"
+
+# CSV options
+infer_schema = "true"
+first_row_is_header = "true"
+delimiter = ","
+
+# The applied options are for CSV files. For other file types, these will be ignored.
+df = spark.read.format(file_type) \
+  .option("inferSchema", infer_schema) \
+  .option("header", first_row_is_header) \
+  .option("sep", delimiter) \
+  .load(file_location)
+
+display(df)
+
+
+#imports
+from pyspark.sql.functions import col, lit, unix_timestamp, datediff, to_date, from_unixtime, max, min, sum, count, explode, year, month, concat, lower, upper, approx_count_distinct, first
+from pyspark.sql.types import ArrayType, LongType, TimestampType, FloatType
+from pyspark.sql.window import Window
+import seaborn as sns
+import matplotlib.pyplot as plt
+from pandas import melt
+
+
+#Prep time series data for visual
+transform = (df
+            .withColumn("AveragePrice", col("AveragePrice").cast("double").alias("AveragePrice"))
+            .withColumn("TotalVolume", col("Total Volume").cast("double").alias("TotalVolume"))
+            .withColumn('DateTime', unix_timestamp(col('Date').cast('string'), "yyyyMMdd"))
+            .withColumn('Region', upper(lower(col("Region"))))
+            )
+
+
+#change datatypes
+from pyspark.sql.types import DateType
+transform = transform.withColumn("Date",df['Date'].cast(DateType()))
+
+
+
+#Select columns, create aliases
+transform = transform.select(year("Date").alias('year'),month("Date").alias('month'),'Region', 'AveragePrice','Total Volume')
+display(transform)
+
+
+#Extract elements of time
+from pyspark.sql.functions import year, month, dayofmonth, quarter
+
+timeseries = (transform.select('year','month','Region', 'AveragePrice', 'Total Volume')
+                        .groupBy('year','month','Region')
+                        .agg( sum(col('AveragePrice')).alias('AveragePrice')
+                             ,sum(col("Total Volume")).alias("Total Volume")
+                            )
+             )
+
+
+#window across regions
+windowRegionItem = Window.partitionBy("Region")
+timeseries = (timeseries
+              .withColumn("yearmonth",concat("year","month"))
+              .withColumn("numMonths",approx_count_distinct("yearmonth").over(windowRegionItem))
+             ).drop("yearmonth")
+
+
+
+#List of regions
+regionList = (timeseries
+               .select("Region")
+               .distinct()
+               .rdd
+               .map(lambda x: x[0]).collect()
+              )
+print("# Items in regionsList:",len(regionList))
+N = len(regionList)
+
+
+#Visual of all time series, all regions
+ts = timeseries.orderBy("Region","year","month").toPandas()
+fig, ax = plt.subplots(figsize=(20,4*N))
+gr = sns.FacetGrid(ts, col="Region", hue="year", col_wrap=4, height=2, aspect = 3, sharey=False)
+gr = gr.map(sns.scatterplot, "month", "AveragePrice", ci=None, legend="full", palette="ch:r=-.2,d=.3_r")
+display(gr.fig)
+
+
+#second visual, all time series all regions
+ts = timeseries.orderBy("Region","year","month").toPandas()
+pal = {2015:'orange',2016:'blue',2017:'green',2018:'yellow',}
+# set figure size based on number of countries, N
+fig, ax = plt.subplots(figsize=(20,4*N))
+g = sns.FacetGrid(ts,col="Region", col_wrap=4, height=2, aspect = 3, sharey=False)
+g = g.map(sns.pointplot, "month", "AveragePrice", "year", ci=None ,legend="full",palette=pal,order=[1,2,3,4,5,6,7,8,9,10,11,12])
+g.add_legend(title="Year", label_order=['2015','2016','2017','2018'])
+display(g.fig)
+
+
+#price variation by month
+ts = timeseries.orderBy("Region","year","month").toPandas()
+fig, ax = plt.subplots(figsize=(6.5, 6.5))
+gr = sns.despine(fig, left=True, bottom=True)
+#clarity_ranking = ["I1", "SI2", "SI1", "VS2", "VS1", "VVS2", "VVS1", "IF"]
+gr = sns.scatterplot(x="month", y="AveragePrice",
+                hue="year", #size="AveragePrice",
+                palette="ch:r=-.2,d=.3_r",
+                #hue_order=clarity_ranking,
+                sizes=(1, 8), linewidth=0,
+                data=ts, ax=ax)
+display(gr)
+
+
+#One region visual, can see each in more detail
+# This dict assigns colors to years
+pal = {2011:'fuchsia',2012:'dodgerblue',2013:'lime',2014:'black',2015:'orange',2016:'blue',2017:'green',2018:'yellow',2019:'red',2020:'purple',}
+N = len(countryList)
+fig, ax = plt.subplots(N,1,figsize=(15,4*N))
+i = 0
+for cnty in countryList:
+  i += 1
+  ts = timeseries.where(col("Country")==cnty).toPandas()
+  plt.subplot(N,1,i)
+  (sns.pointplot(x='Month', y='SalesQty', data=ts, ci=None, hue='Year', legend='full', palette=pal, height=4, aspect=8,order=[1,2,3,4,5,6,7,8,9,10,11,12])
+     .legend(title="Year", loc='center right', bbox_to_anchor=(1.10, 0.5), ncol=1)
+  )
+  plt.title(cnty)
+#   Add these label and tick settings to remove the x-axis label, tick marks and tick labels
+#   plt.xlabel('')
+#   plt.setp(plt.gcf().get_axes(),xticks=[])
+  fig.tight_layout(pad=3.0)
+display(fig)
+
+
+
+#EDA for features
+df.sort("AveragePrice").explain()
+
+
+# Create a temp table
+temp_table_name = "avocado_csv"
+df.createOrReplaceTempView(temp_table_name)
+
+
+#Average across all regions, minimum across all regions
+spark.sql("Select max(AveragePrice) from avocado_csv").take(1)
+from pyspark.sql.functions import max, min
+df.select(min("AveragePrice")).take(1)
+
+
+maxsql = spark.sql("Select region, sum(4046) as RegionBagTotal from avocado_csv group by region order by sum(4046) asc")
+maxsql.show()
+
+
+#choosing the intial fields to screen as potential features
+df = df[['Date','AveragePrice','Total Bags','Small Bags','Large Bags','XLarge Bags','Type','Year','Region']]
+df[['Date','AveragePrice','Total Bags','Small Bags','Large Bags','XLarge Bags','Type','Year','Region']].explain()
+
+
+#convert the Date field from a TimeStamp to a Date
+from pyspark.sql.types import DateType
+df = df.withColumn("Date",df['Date'].cast(DateType()))
+display(df)
+
+
+#Identify and count null values
+from pyspark.sql.functions import col
+def null_value_count(df):
+  null_columns_counts = []
+  numRows = df.count()
+  for k in df.columns:
+    nullRows = df.where(col(k).isNull()).count()
+    if(nullRows > 0):
+      temp = k,nullRows
+      null_columns_counts.append(temp)
+  return(null_columns_counts)
+
+#create a list of the nulls discovered in the previous function
+null_columns_count_list = null_value_count(df)
+spark.createDataFrame(null_columns_count_list, ['Column_With_Null_Value', 'Null_Values_Count']).show()
+
+
+%sql
+--breakout of conventional vs. organic
+select Type, count(1) from avocado_csv group by Type
+
+
+#creating a new dataframe after splitting the date field
+from pyspark.sql.functions import year, month, dayofmonth, quarter
+dg = df.select(year("Date").alias('year'),month("Date").alias('month'),dayofmonth("Date").alias('dayofmonth'),"AveragePrice","Type","Total Bags","Small Bags","Large Bags","XLarge Bags","Region")
+display(dg)
+
+
+#change the 'type' column to be numeric
+dg = dg.replace("conventional","0")
+dg = dg.replace("organic","1")
+from pyspark.sql.types import FloatType, IntegerType
+dg = dg.withColumn("Type",dg['Type'].cast(IntegerType()))
+display(dg)
+
+
+#count the number of distinct regions
+from pyspark.sql.functions import countDistinct
+dgregions = dg.groupBy("year").agg(countDistinct("Region"))
+dgregions.show()
+
+
+#drop the breakdown of bags as they are the sum of the label column
+dg = dg.drop("Small Bags","Large Bags","XLarge Bags")
+display(dg)
+
+
+#Basic Statistics
+from pyspark.sql.functions import avg, stddev, col
+dg1 = dg.select("Region","Type","year","month","AveragePrice").groupBy("Region","year","Type").agg(avg(col("AveragePrice")).alias('mean'),stddev(col("AveragePrice")).alias('stdev'))
+
+
+#Coefficient of Variation 
+dg1 = dg1.withColumn('cov',col("stdev")/col("mean")).na.drop()
+display(dg1)
+
+
+#Label column visuals
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set(rc={'figure.figsize':(11, 4)})
+display(dg1.select("year","Region","Total Bags").groupBy("Region","year").agg(avg(col("Total Bags")).alias('meanbags')))
+
+
+#trending line chart of standard deviation
+display(dg1.select("year","Region","stdev"))
+#.groupBy("Region","year")).agg(avg(col("stdev")).alias('stdev1')))
+
+
+#index string columns
+from pyspark.ml.feature import StringIndexer
+indexer = StringIndexer(inputCol="Region", outputCol="RegionIndex")
+indexed = indexer.fit(dg).transform(dg)
+indexed.show()
+dgws = indexed.drop("Region")
+
+
+#Split the dataset randomly, 80% for training and 20% for testing
+train, test = dgws.randomSplit([0.8, 0.2])
+
+
+#Features for ML
+from pyspark.ml.feature import VectorAssembler, VectorIndexer
+featuresCols = dgws.columns
+featuresCols.remove('AveragePrice')
+# This concatenates all feature columns into a single feature vector in a new column "rawFeatures".
+vectorAssembler = VectorAssembler(inputCols=featuresCols, outputCol="rawFeatures")
+# This identifies categorical features and indexes them.
+vectorIndexer = VectorIndexer(inputCol="rawFeatures", outputCol="features")
+
+
+#set up model
+from pyspark.ml.regression import GBTRegressor
+# Takes the "features" column and learns to predict Total Bags
+
+
+#Cross validation
+from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+from pyspark.ml.evaluation import RegressionEvaluator
+# Define a grid of hyperparameters to test:
+#  - maxDepth: max depth of each decision tree in the GBT ensemble
+#  - maxIter: iterations, i.e., number of trees in each GBT ensemble
+# To get the highest accuracy, try deeper trees (10 or higher) and more trees in the ensemble (>100).
+paramGrid = ParamGridBuilder()\
+  .addGrid(gbt.maxDepth, [2, 5])\
+  .addGrid(gbt.maxIter, [20, 150])\
+  .addGrid(gbt.maxBins,[54])\
+  .build()
+# Define an evaluation metric.  This tells CrossValidator how well it's doing by comparing the true labels with predictions.
+evaluator = RegressionEvaluator(metricName="mae", labelCol=gbt.getLabelCol(), predictionCol=gbt.getPredictionCol())
+# Declare the CrossValidator, which runs model tuning automatically.
+cv = CrossValidator(estimator=gbt, evaluator=evaluator, estimatorParamMaps=paramGrid)
+gbt = GBTRegressor(labelCol="AveragePrice")
+
+
+#tie together the feature processing and pipeline
+from pyspark.ml import Pipeline
+pipeline = Pipeline(stages=[vectorAssembler, vectorIndexer, cv])
+
+
+#setup MLFlow Run
+import mlflow
+pipelineModel = pipeline.fit(train)
+
+
+#Predictions
+predictions = pipelineModel.transform(test)
+
+
+#see predictions vs actuals
+display(predictions.select("AveragePrice", "prediction", *featuresCols))
+
+
+#Metrics
+MAE = evaluator.evaluate(predictions)
+print("MAE on our test set: %g" % MAE)
+
+
+#residuals
+display(predictions.select("AveragePrice","prediction"))
+
