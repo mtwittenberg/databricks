@@ -1,0 +1,98 @@
+jdbcHostname = "database1.database.windows.net"
+jdbcDatabase = "db1"
+jdbcPort = 1433
+
+#jdbcUsername = dbutils.secrets.get(scope ='key-vault-secrets',  key = 'sql-username')
+#jdbcPassword = dbutils.secrets.get(scope ='key-vault-secrets',  key = 'sql-password')
+
+jdbcUsername = 'test'
+jdbcPassword = 'test'
+
+jdbcUrl = 'jdbc:sqlserver://{0}:{1};database={2}'.format(jdbcHostname, jdbcPort, jdbcDatabase)
+connectionProperties = {
+  'user' : jdbcUsername,
+  'password' : jdbcPassword,
+  'driver' : 'com.microsoft.sqlserver.jdbc.SQLServerDriver'
+}
+
+
+#Pushdown query
+pushDown_query = "(select * from db1) DT"
+df = spark.read.jdbc(url=jdbcUrl, table=pushDown_query, properties=connectionProperties)
+display(df)
+
+
+#clean, lower case, remove spaces
+for c in df.columns:
+  df = df.withColumnRenamed(c, c.replace(' ','').lower())
+df.printSchema()
+
+
+# Create a temp table
+temp_table_name = "test_data"
+df.createOrReplaceTempView(temp_table_name)
+
+
+from pyspark.sql.types import DateType
+df = df.withColumn("postdate",df['postdate'].cast(DateType()))
+df = df.select(year("postdate").alias('postyear'),month("postdate").alias('postmonth'),dayofmonth("postdate").alias('postday'),"co_code","period","year","postdate","docudate","docunumber","account","accountname","amount","debitamount","creditamount","currency","description","debitorcredit","userid","approverid","timeofpost")
+display(df)
+
+
+#import pyspark.sql.functions as f
+#split_col = f.split(df['postdate'],'/')
+#df = df.withColumn('postmonth', split_col.getItem(0))
+#df = df.withColumn('postday', split_col.getItem(1))
+#df = df.withColumn('postyear', split_col.getItem(2))
+#display(df)
+
+
+df.describe("documnumber").show()
+
+
+#Identify and count null values
+from pyspark.sql.functions import col
+def null_value_count(df):
+  null_columns_counts = []
+  numRows = df.count()
+  for k in df.columns:
+    nullRows = df.where(col(k).isNull()).count()
+    if(nullRows > 0):
+      temp = k,nullRows
+      null_columns_counts.append(temp)
+  return(null_columns_counts)
+#create a list of the nulls discovered by the function
+null_columns_count_list = null_value_count(df)
+spark.createDataFrame(null_columns_count_list, ['Column_With_Null_Value', 'Null_Values_Count']).show()
+
+
+#Visual 1
+from pyspark.sql.functions import avg, stddev, col, countDistinct
+test1 = df.where(col("docunumber").isNotNull())
+test1 = test1.select("userid").groupBy("userid").count()
+#test1 = test1.filter("'count' = null ")
+display(test1)
+
+
+#Visual 2
+test2 = df.where(col("co_code").isNotNull())
+test2 = test2.select("co_code").groupBy("co_code").count()
+display(test2)
+
+
+#Visual 3
+test3 = df.where(col("postmonth").isNotNull())
+test3 = test3.select("postmonth").groupBy("postmonth").count().sort(col("postmonth").asc())
+display(test3)
+
+
+#Visual 4
+test4 = df.where(col("postday").isNotNull())
+test4 = test4.select("postday").groupBy("postday").count().sort(col("count"))#.asc())
+display(test4)
+
+
+#Visual 5
+test5 = df.where(col("docunumber").isNotNull())
+test5 = test5.select("docunumber").groupBy("docunumber").count()
+display(test5)
