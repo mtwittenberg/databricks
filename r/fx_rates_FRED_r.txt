@@ -1,0 +1,86 @@
+##Load packages
+list_packages <- c('dplyr', 'quantmod','data.table','ETLUtils','SparkR')
+new_packages <- list_packages[!(list_packages %in% installed.packages()[,"Package"])]
+if(length(new_packages)) install.packages(new_packages, dependencies = TRUE)
+lapply(list_packages, suppressPackageStartupMessages(library), character.only = TRUE)
+
+
+##Choose rates, tickers are matched to those from St. Louis Federal reserve 
+symbols <- c("DEXJPUS", "DEXCHUS","DEXCAUS","DEXMXUS","DEXKOUS","DEXBZUS","DEXINUS","DEXVZUS","DEXSZUS","DEXMAUS","DEXTHUS","DEXTAUS","DEXHKUS","DEXSFUS","DEXSIUS","DEXSDUS","DEXNOUS","DEXDNUS","DEXSLUS","DEXUSUK","DEXUSAL","DEXUSEU")
+
+
+#DEXJPUS = Yen/USD
+#DEXCHUS = ChineseYuan/USD
+#DEXCAUS = CanadaDollar/USD
+#DEXMXUS = MexicanPeso/USD
+#DEXKOUS = SouthKoreanWon/USD
+#DEXBZUS = BrazilReal/USD
+#DEXINUS = IndianRupee/USD
+#DEXVZUS = VenezualanBolivar/USD
+#DEXSZUS = SwissFranc/USD
+#DEXMAUS = MalaysianRinggit/USD
+#DEXTHUS = ThailandBaht/USD
+#DEXTAUS = TaiwanDollar/USD
+#DEXHKUS = HongKongDollar/USD
+#DEXSFUS = SouthAfricaRand/USD
+#DEXSIUS = SingaporeDollar/USD
+#DEXSDUS = SwedishKronor/USD
+#DEXNOUS = NorwegianKronor/USD
+#DEXDNUS = DanishKroner/USD
+#DEXSLUS = SriLankanRupees/USD
+#DEXUSUK = USD/GBP
+#DEXUSAL = USD/AUD
+#DEXUSEU = USD/EUR
+
+
+## Create new environment
+fxrates <- new.env()
+
+
+fixedsymbols <- lapply(symbols, function(x) {
+                   gsub("/", "", x)
+              })
+
+
+## Load symbols into environment
+getSymbols(Symbols = symbols, src = "FRED")
+
+
+xtsList <- lapply(fixedsymbols, function(s) {
+  df <- get(s)
+  colnames(df) <- colnames(df)
+  return(df)
+})
+
+
+## Merge the rates in one table
+masterxts <- do.call(merge, xtsList)
+
+
+tail(masterxts)
+colnames(masterxts)
+
+
+## Rename columns
+names(masterxts) <- c("jpyyen_usd","chinayuan_usd","candollar_usd","mexpeso_usd","skwon_usd","brazilreal_usd","indiarupee_usd","venbolivar_usd","swissfranc_usd","malayringgit_usd","thaibaht_usd","taiwandollar_usd","hkdollar_usd","sarand_usd","singaporedollar_usd","swedishkronor_usd","norwegiankronor_usd","danishkronor_usd", "srilankarupee_usd","usd_britishpound","usd_australiandollar","usd_euro")
+
+colnames(masterxts)
+tail(masterxts)
+
+##Convert to data table
+sqlxts <- as.data.table(masterxts, keep.rownames = TRUE)
+
+
+## Convert to a dataframe
+fxdf <- createDataFrame(sqlxts)
+display(fxdf)
+
+
+## Get connections to SQL
+jdbcUrl <- "jdbc:sqlserver://fxratesdb.database.windows.net:1433;databaseName=fxrates"
+jdbcUsername <- dbutils.secrets.get(scope ='key-vault-secrets',  key = 'sql-username')
+jdbcPassword <- dbutils.secrets.get(scope ='key-vault-secrets',  key = 'sql-password')
+
+
+##Write to SQL
+write.jdbc(fxdf, jdbcUrl, "FX_Rates", mode = 'append', user = jdbcUsername, password = jdbcPassword)
