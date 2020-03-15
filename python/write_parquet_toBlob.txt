@@ -1,0 +1,38 @@
+#read data from blob
+df = spark.read.parquet("/mnt/folder1/ts/ts1")
+display(df)
+
+
+#Write all data to one table as parquet
+#df.write.format("parquet").saveAsTable("tbloneitem")
+df.write.format("parquet").saveAsTable("tblAllitem")
+
+
+%sql
+--Drops existing table, recreates new table with year and month concatenated
+--drop table tblAllitem_m;
+--Create table tblAllitem_m as
+--Select *, concat(Year, '-', Month, '-', 01) as MonthYear from tblAllitem_m
+
+
+%sql
+--Drops existing table, recreates new table with year and month concatenated
+--drop table tbloneitem_m;
+Create table tbloneitem_m as 
+SELECT *, concat(Year, '-', Month, '-', 01) as MonthYear from tbloneitem_m where Country = 'USA'
+
+
+%sql
+select * from tbloneitem_m
+
+
+#create spark dataframe
+#dfAllitem = spark.sql("Select * from tblallitem_m")
+dfoneitem = spark.sql("Select * from tbloneitem_m")
+
+
+dfoneitem.coalesce(1).write.csv(path='/mnt/folder2/ts/ts2',mode='overwrite',header='true')
+#dfoneitem.coalesce(1).write.parquet(path='/mnt/folder2/ts/ts3',mode='overwrite')
+
+
+
