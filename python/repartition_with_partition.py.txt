@@ -1,0 +1,2 @@
+dftrain2.repartition("Country_Item").write.partitionBy("Country_Item").mode('overwrite').option("header","true").format("csv").save('/mnt/forecast/ts/azuremldata/training_data_germany_all_folders')
+dftest2.repartition("Country_Item").write.partitionBy("Country_Item").mode('overwrite').option("header","true").format("csv").save('/mnt/forecast/ts/azuremldata/testing_data_germany_all_folders')
