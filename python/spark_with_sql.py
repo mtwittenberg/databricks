@@ -1,0 +1,2 @@
+df_all = spark.sql("select * from AllData where Year(Date) < 2018 and Year(Date) > 2011 order by Countryitem")
+df1_all = spark.sql("select * from AllData where Year(Date) >= 2018 order by Countryitem")
